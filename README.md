@@ -40,7 +40,7 @@ A powerful, high-performance **Retrieval-Augmented Generation (RAG) Assistant** 
 
 ### 1. Clone the Repository
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/lackable/PDF-RAG-Assistant
 cd "Final PDF Rag"
 ```
 
