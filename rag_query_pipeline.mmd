@@ -1,0 +1,71 @@
+flowchart TD
+    U([User sends message\nPOST /api/chat]) --> A[session_store.get_history\nrecent_window = last 6 messages]
+
+    A --> B
+
+    subgraph CLASSIFY["State Classification (Gemini, temp=0)"]
+        B["classify_state(query, recent_window)"] --> C{State?}
+    end
+
+    C -->|greeting| D
+
+    subgraph GREET["Greeting Branch"]
+        D["stream_greeting(query)"] --> D1[GREETING_SYSTEM_PROMPT\n+ user message]
+        D1 --> D2[Gemini astream]
+        D2 --> D3[SSE: token stream]
+        D3 --> D4["SSE: usage event\n(tiktoken in/out)"]
+    end
+
+    C -->|query| E
+
+    subgraph QUERY["Query Branch"]
+        E["retriever.search(query, top_k)"] --> E1
+
+        subgraph RETRIEVAL["Hybrid Retrieval"]
+            E1["embedder.embed_query(query)"] --> E2["chroma_store.query(embedding)\n→ top 20 dense candidates"]
+            E1 --> E3["bm25_store.query(query)\n→ top 20 BM25 candidates"]
+            E2 --> E4["Merge & de-duplicate\ntag retrieval_source:\ndense / bm25 / both"]
+            E3 --> E4
+            E4 --> E5["Enrich: docstore.get_chunk(id)\n→ fetch raw_content"]
+            E5 --> E6["reranker.rerank(query, merged)\nQwen3-Reranker-0.6B 4-bit\nscore = P(yes|prompt)"]
+            E6 --> E7["Return top_k chunks\nwith rerank_score"]
+        end
+
+        E7 --> E8["SSE: chunks event\n(chunk id, content, metadata, score)"]
+        E8 --> E9["stream_query_answer(query, chunks)"]
+        E9 --> E10["_build_context:\nnumbered passages\nLost-in-the-Middle reordering"]
+        E10 --> E11["QUERY_SYSTEM_PROMPT\n+ retrieved_passages\n+ question"]
+        E11 --> E12[Gemini astream]
+        E12 --> E13[SSE: token stream]
+        E13 --> E14["SSE: usage event\n(tiktoken in/out)"]
+    end
+
+    C -->|follow_up| F
+
+    subgraph FOLLOWUP["Follow-up Branch"]
+        F{Has prior\nquery in history?} -->|No| F1["Treat as query\nmaster_query = current input"]
+        F -->|Yes| F2["build_master_query:\nanchor at last query state\njoin all inputs since anchor\n+ current input"]
+        F1 --> F3["SSE: master_query event"]
+        F2 --> F3
+        F3 --> F4["retriever.search(master_query, top_k)\n(same hybrid pipeline as Query branch)"]
+        F4 --> F5["SSE: chunks event"]
+        F5 --> F6["build_history_context:\nanchor at last query\nformat XML turns: input + output only"]
+        F6 --> F7["stream_followup_answer(query, chunks, history_context)"]
+        F7 --> F8["QUERY_SYSTEM_PROMPT\n+ conversation_history\n+ retrieved_passages\n+ current_question"]
+        F8 --> F9[Gemini astream]
+        F9 --> F10[SSE: token stream]
+        F10 --> F11["SSE: usage event\n(tiktoken in/out)"]
+    end
+
+    D4 --> G["SSE: done event"]
+    E14 --> G
+    F11 --> G
+
+    G --> H["session_store.append_message\n(input, output, input_tokens,\noutput_tokens, time_taken_s, sources)"]
+
+    H --> I{First message\nin session?}
+    I -->|Yes| J["auto_name_from_message\nrename session"]
+    I -->|No| K
+    J --> K
+
+    K --> L([Response complete\nFrontend renders:\n⏱️ timer · 🪙 tokens · 📄 sources ▾])

@@ -1,0 +1,83 @@
+flowchart TD
+    A([Start: ingest.py]) --> B{Single PDF\nor directory?}
+    B -->|--pdf flag| C[Load single PDF path]
+    B -->|default| D[Glob *.pdf from content_dir]
+    C --> E[For each PDF]
+    D --> E
+
+    E --> F{Already in\ndocstore?}
+    F -->|Yes & no force| G([Skip PDF])
+    F -->|No or --force-reingest| H{force_reingest?}
+    H -->|Yes| I[Delete old: docstore\n+ ChromaDB entries]
+    H -->|No| J
+
+    I --> J[Read PDF → PdfReader\nget total_pages]
+
+    J --> K
+
+    subgraph PHASE1["Phase 1 · Parallel Parsing (ProcessPoolExecutor)"]
+        K[Split pages into batches of 5] --> L["parser.parse_page_batch(pdf_path, batch)"]
+        L --> M[Docling DocumentConverter\ndo_ocr=True\ndo_table_structure=True]
+        M --> N[Export page → dict]
+        N --> O[Collect page_results dict]
+    end
+
+    O --> P
+
+    subgraph PHASE2["Phase 2 · VLM & Markdown Assembly (sequential)"]
+        P[For each page in order] --> Q["md_builder.build_page_markdown(page_no, doc_dict)"]
+        Q --> R[Detect: text / table / image blocks]
+        R --> S[Image blocks → image_vlm for VLM caption]
+        S --> T[Emit: page marker + markdown]
+        T --> U[Collect page_markdowns]
+    end
+
+    U --> V
+
+    subgraph PHASE3["Phase 3 · Concatenation"]
+        V[Join all page markdowns\nwith --- separator] --> W[full_md string with\npage markers]
+    end
+
+    W --> X
+
+    subgraph PHASE4["Phase 4 · Smart Chunking (chunker.chunk)"]
+        X[Build page_map\nfrom HTML comments] --> Y[Segment detection\nline-by-line scan]
+        Y --> Y1["text segments"]
+        Y --> Y2["table segments\n(| lines)"]
+        Y --> Y3["image segments\n(blockquote markers)"]
+        Y1 --> Z[Sliding window: CHUNK_SIZE tokens\nwith CHUNK_OVERLAP]
+        Y1 --> ZA["Small segments < 150 tok:\nmerge with prev or next"]
+        Y2 --> ZB[Prepend last N sentences\nfrom preceding text as context]
+        Y3 --> ZC[Extract page number + VLM summary]
+        Z --> ZD[ChunkRecord list]
+        ZA --> ZD
+        ZB --> ZD
+        ZC --> ZD
+    end
+
+    ZD --> AA
+
+    subgraph PHASE5["Phase 5 · Embedding"]
+        AA["embedder.embed_chunks(chunks)"] --> AB[sentence-transformers model\nbatch encode text_for_embedding]
+        AB --> AC[Store embedding on ChunkRecord]
+    end
+
+    AC --> AD
+
+    subgraph PHASE6["Phase 6 · Parallel Write (ThreadPoolExecutor)"]
+        AD[f1: docstore.append_pdf] --> AE[Write chunks JSON\nto docstore/]
+        AD --> AF[f2: chroma_store.upsert]
+        AF --> AG[ChromaDB PersistentClient\nbatch upsert: id + embedding\n+ document + metadata]
+    end
+
+    AE --> AH
+    AG --> AH
+
+    subgraph PHASE7["Phase 7 · BM25 Index Rebuild"]
+        AH["bm25_store.build_index()"] --> AI[Load all chunks from docstore]
+        AI --> AJ[Tokenize: lowercase + stopword removal]
+        AJ --> AK[BM25Okapi fit]
+        AK --> AL[Atomic pickle save to\nbm25_store.pkl]
+    end
+
+    AL --> AM([✅ PDF Ingested])

@@ -1,0 +1,53 @@
+# Environments and API Keys
+.env
+.env.*
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Python cache & compiling
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+pyvenv.cfg
+
+# Project Specific Data & Caches
+chroma_db/
+sessions/
+docstore/
+logs/
+
+# Ignore all contents of content/ except .gitkeep
+content/*
+!content/.gitkeep
+
+# Temporary/Installer log files
+0.2.2
+pip-log.txt
+*.log
